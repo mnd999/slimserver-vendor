@@ -687,8 +687,9 @@ function build {
                 cd ..
                 if [ "$PERL_516" -o "$PERL_518" -o "$PERL_520" -o "$PERL_522" -o "$PERL_524" ]; then
                    build_module DBD-SQLite-1.34_01 "" 0
-                fi
-                build_module DBD-SQLite-1.34_01
+                else
+		   build_module DBD-SQLite-1.34_01
+		fi
             fi
             
             ;;
