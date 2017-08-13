@@ -698,9 +698,8 @@ function build {
             cd Image-Scale-0.11
 
             if [[ "$OS" = "FreeBSD" && "$PERL_MINOR_VER" -ge 22 ]]; then
-                TEMP_ARCH=` $PERL_BIN -MConfig -le 'print $Config{archname}' | sed 's/gnu-//' | sed 's/^i[3456]86-/i386-/' | sed 's/armv.*?-/arm-/' `
-                mkdir -p $PERL_ARCH/$TEMP_ARCH
-                cp -Rv lib/Image $PERL_ARCH/$TEMP_ARCH/
+                mkdir -p $PERL_ARCH/$ARCH
+                cp -Rv lib/Image $PERL_ARCH/$ARCH/
             fi
 
             cp -Rv ../hints .
