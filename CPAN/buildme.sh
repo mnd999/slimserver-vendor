@@ -568,6 +568,8 @@ function build {
                 elif [ "$OS" = 'FreeBSD' ]; then
                     ICUFLAGS="$FLAGS -DU_USING_ICU_NAMESPACE=0"
                     ICUOS="FreeBSD"
+                    for i in ../../icu_patches/freebsd/patch-*;
+                    do patch -p0 < $i; done
                 fi
 
                 if [[ "$OS" = 'FreeBSD' ]]; then
