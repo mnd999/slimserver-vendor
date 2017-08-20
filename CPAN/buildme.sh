@@ -572,7 +572,7 @@ function build {
 
                 if [[ "$OS" = 'FreeBSD' ]]; then
                 # This is necessary to make the ICU build script respect our /etc/make.conf specified compiler options
-                    CC="$GCC" CXX="$GXX" CPP="$GPP" CFLAGS="$ICUFLAGS" CXXFLAGS="$ICUFLAGS" LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS" \
+                    CC="$GCC" CXX="$GXX" CPP="$GPP" CFLAGS="$ICUFLAGS" CXXFLAGS="$ICUFLAGS --std=c++0x" LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS" \
                         ./runConfigureICU $ICUOS --prefix=$BUILD --enable-static --with-data-packaging=archive
                 else
                     CFLAGS="$ICUFLAGS" CXXFLAGS="$ICUFLAGS" LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS" \
