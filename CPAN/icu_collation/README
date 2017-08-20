@@ -1,0 +1,72 @@
+Author: Matthew Kempe
+Date: 19 Aug 2017
+
+This is a brief explanation of the Logitech Media Server's custom ICU collation
+file and its creation. This file will become most useful for ICU v.60+.
+
+At the time of this writing, the following files are in this directory:
+
+46_small_icu_coll.txt - The legacy LMS custom ICU 4.6 .dat file contents
+59_excess_icu_coll.txt - The unecessary contents within the stock ICU 59.1 .dat.
+59_full_icu_coll.txt - The stock ICU 59.1 .dat file contents.
+59_small_icu_coll.txt - The LMS custom ICU 59.1 .dat file contents
+icudt46l.dat - The legacy LMS custom ICU 4.6 .dat file (little endian)
+icudt59l.dat - The stock ICU 59.1 .dat file (little endian)
+small_icudt59l.dat - The LMS custom ICU 59.1 .dat file (little endian)
+
+The LMS custom collation only retains the collation files for the following:
+cs, da, de, en, es, fi, fr, he, it, ja, nb, nl, pl, pt, ru, sv, zh
+
+In ICU 4.6, this required two files for each language:
+coll/cs.res
+coll/cs_CZ.res
+
+In addition, there were several mandated, common file contents. Following v4.8,
+ICU shifted to a different numbering scheme, so the next release was v49. Each
+collation file is unique to its release, and the ICU binaries and libraries search
+for the .dat file based on the two digit number. This allows multiple .dat files to 
+coexist in the same directory without conflict.
+
+Starting with v53, ICU shifted to a new .dat file structure, wherein basic formatting,
+display names and other localized data are separated from the collations. This meant
+that for each language in iCU v53+, now three files are required:
+cs.res
+cs_CZ.res
+coll/cs.res
+
+As long as this structure remains in place, the "59_small_icu_coll.txt" listing can
+serve as the template list of collations moving foward. The current file contents were
+built by hand and through trial and error.
+
+(ROUGH) HOWTO:
+In order to build the next generation of LMS custom ICU collation, a working icupkg needs
+to be on the system. This can either be built from source, or (preferred) installed from 
+the OS's rpm/pkg manager. 
+
+1. The first step is to extract the full file listing from the stock collation file. This
+file is located within the icu4c-{ver}-src.tgz, at: icu/source/data/in
+
+    icupkg -l icudt59l.dat > 59_full_icu_coll.txt
+
+2. Now we need to make the list of files to be deleted from the stock .dat
+
+    grep -v -x -f 59_small_icu_coll.txt 59_full_icu_coll.txt > 59_excess_icu_coll.txt
+
+3. Next we cut out all the excess files from the stock .dat to create ours
+
+    icupkg -r 59_excess_icu_coll.txt small_icudt59l.dat
+
+This example uses the output filename of "small_icudt59l.dat" for process clarity. The 
+ICU dat files cannot be renamed using "mv" or "cp". In order to get our custom file 
+ready for prime time, these are the steps:
+
+4. Rename the LMS custom .dat file, and relocate it at the same time
+
+   icupkg small_icudt59l.dat ../icudt59l.dat
+
+5. Create a big endian version
+
+   cd ..
+   icupkg -tb icudt59l.dat icudt59b.dat
+
+Thus endeth the lesson. 

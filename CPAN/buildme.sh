@@ -132,7 +132,7 @@ echo "Looks like your compiler is $GCC"
 $GCC --version
 
 CC_TYPE=`$GCC --version`
-PERL_CC=`$ARCHPERL -V | grep cc=\' | sed "s#.*cc=\'##g" | sed "s#\',\ ccflags.*##g"`
+PERL_CC=`$ARCHPERL -V | grep cc=\' | sed "s#.*cc=\'##g" | sed "s#\',.*##g"`
 
 if [[ "$PERL_CC" != "$GCC" ]]; then
     echo "********************************************** WARNING *************************************"
@@ -612,6 +612,8 @@ function build {
                 elif [ "$OS" = 'FreeBSD' ]; then
                     ICUFLAGS="$FLAGS -DU_USING_ICU_NAMESPACE=0"
                     ICUOS="FreeBSD"
+                    for i in ../../icu_patches/freebsd/patch-*;
+                    do patch -p0 < $i; done
                 fi
 
                 if [[ "$OS" = 'FreeBSD' ]]; then
