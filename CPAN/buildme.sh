@@ -92,7 +92,11 @@ else
     exit
 fi
 
+
+# Set default values prior to potential overwrite for FreeBSD platforms
 GCC=gcc
+GXX=g++
+GPP=cpp
 if [ "$OS" = "FreeBSD" ]; then
     BSD_MAJOR_VER=`uname -r | sed 's/\..*//g'`
     BSD_MINOR_VER=`uname -r | sed 's/.*\.//g'`
@@ -104,11 +108,17 @@ if [ "$OS" = "FreeBSD" ]; then
         fi
         if [[ ! -z "$MAKE_CC" ]]; then
             GCC="$MAKE_CC"
+        elif [ $BSD_MAJOR_VER -ge 10 ]; then
+            # FreeBSD started using clang as the default compiler starting with 10.
+            GCC=cc
         else
             GCC=cc
         fi
         if [[ ! -z "$MAKE_CXX" ]]; then
             GXX="$MAKE_CXX"
+        elif [ $BSD_MAJOR_VER -ge 10 ] ; then
+            # FreeBSD started using clang++ as the default compiler starting with 10.
+            GXX=c++
         else
             GXX=c++
         fi
@@ -128,10 +138,69 @@ for i in $GCC cpp rsync make rsync ; do
     fi
 done
 
+
 echo "Looks like your compiler is $GCC"
 $GCC --version
 
-CC_TYPE=`$GCC --version`
+# This method works for FreeBSD, with "normal" installs of GCC and clang.
+CC_TYPE=`$GCC --version | head -1`
+
+# Determine compiler type and version
+CC_IS_CLANG=false
+CC_IS_GCC=false
+CC_VERSION=`$GCC -dumpversion | sed "s#\ *)\ *##g" | sed -e 's/\.\([0-9][0-9]\)/\1/g' -e 's/\.\([0-9]\)/0\1/g' -e 's/^[0-9]\{3,4\}$/&00/'`
+# This uses bash globbing for the If statement
+if [[ "$CC_TYPE" =~ "clang" ]]; then
+    CC_IS_CLANG=true
+elif [[ "$CC_TYPE" =~ "gcc" || "$CC_TYPE" =~ "GCC" ]]; then
+    CC_IS_GCC=true
+else
+    echo "********************************************** ERROR ***************************************"
+    echo "*"
+    echo "*    You're not using GCC or clang. Somebody's playing a prank on me."
+    echo "*    Cowardly choosing to abandon build."
+    echo "*"
+    echo "********************************************************************************************"
+    exit 1
+fi
+
+if [[ "$CC_IS_GCC" == true && "$CC_VERSION" -lt 40600 ]]; then
+    echo "********************************************** ERROR ****************************************"
+    echo "*"
+    echo "*    It looks like you're using GCC earlier than 4.6,"
+    echo "*    Cowardly choosing to abandon build."
+    echo "*    This is because modern ICU requires -std=c++11"
+    echo "*"
+    echo "********************************************************************************************"
+    exit 1
+fi
+
+# Clang 3.0 pretends to be GCC 4.2.1
+if [[ "$CC_IS_CLANG" == true && "$CC_VERSION" -lt 40200 ]]; then
+    echo "********************************************** ERROR ****************************************"
+    echo "*"
+    echo "*    It looks like you're using clang earlier than 3.0,"
+    echo "*    Cowardly choosing to abandon build."
+    echo "*    This is because modern ICU requires -std=c++11"
+    echo "*"
+    echo "********************************************************************************************"
+    exit 1
+fi
+
+if [[ ! -z `echo "#include <iostream>" | "$GCC" -xc++ -dM -E - | grep LIBCCP_VERSION` ]]; then
+    GCC_LIBCPP=true
+elif [[ ! -z `echo "#include <iostream>" | "$GCC" -xc++ -dM -E - | grep __GLIBCXX__` ]]; then
+    GCC_LIBCPP=false
+else
+    echo "********************************************** NOTICE **************************************"
+    echo "*"
+    echo "*    Doesn't seem you're using libc++ or lc++ as your c++ library."
+    echo "*    I will assume you're using the GCC stack, and that DBD needs -lstdc++."
+    echo "*"
+    echo "********************************************************************************************"
+    exit 1
+fi
+
 PERL_CC=`$ARCHPERL -V | grep cc=\' | sed "s#.*cc=\'##g" | sed "s#\',.*##g"`
 
 if [[ "$PERL_CC" != "$GCC" ]]; then
@@ -526,7 +595,11 @@ function build {
                 build_module Class-XSAccessor-1.18
                 cp -pR $PERL_BASE/lib/perl5/$ARCH/Class $PERL_ARCH/
             else
-                build_module Class-XSAccessor-1.05
+                if [[ "$CC_IS_CLANG" == true ]]; then
+                    build_module Class-XAccessor-1.18
+                else
+                    build_module Class-XSAccessor-1.05
+                fi
             fi
             ;;
         
@@ -568,18 +641,12 @@ function build {
                 elif [ "$OS" = 'FreeBSD' ]; then
                     ICUFLAGS="$FLAGS -DU_USING_ICU_NAMESPACE=0"
                     ICUOS="FreeBSD"
-                    for i in ../../icu_patches/freebsd/patch-*;
+                    for i in ../../icu59_patches/freebsd/patch-*;
                     do patch -p0 < $i; done
                 fi
-
-                if [[ "$OS" = 'FreeBSD' ]]; then
-                # This is necessary to make the ICU build script respect our /etc/make.conf specified compiler options
-                    CC="$GCC" CXX="$GXX" CPP="$GPP" CFLAGS="$ICUFLAGS" CXXFLAGS="$ICUFLAGS --std=c++0x" LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS" \
-                        ./runConfigureICU $ICUOS --prefix=$BUILD --enable-static --with-data-packaging=archive
-                else
-                    CFLAGS="$ICUFLAGS" CXXFLAGS="$ICUFLAGS" LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS" \
-                        ./runConfigureICU $ICUOS --prefix=$BUILD --enable-static --with-data-packaging=archive
-                fi
+                CC="$GCC" CXX="$GXX" CPP="$GPP" \
+                CFLAGS="$ICUFLAGS" CXXFLAGS="$ICUFLAGS" LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS" \
+                    ./runConfigureICU $ICUOS --prefix=$BUILD --enable-static --with-data-packaging=archive
                 $MAKE
                 if [ $? != 0 ]; then
                     echo "make failed"
@@ -609,8 +676,9 @@ function build {
             # Custom build for ICU support
             tar_wrapper zxvf DBD-SQLite-1.34_01.tar.gz
             cd DBD-SQLite-1.34_01
-            if [[ "$OS" = 'FreeBSD' && "$BSD_MAJOR_VER" -ge 11 && "$CC_TYPE" =~ "clang" ]]; then
-                patch -p0 < ../DBD-SQLite-ICU-clang.patch
+            if [[ "$GCC_LIBCPP" == true ]]; then
+            # Need this because GLIBCXX uses -lstdc++, but LIBCPP uses -lc++
+                patch -p0 < ../DBD-SQLite-ICU-libcpp.patch
             else
                 patch -p0 < ../DBD-SQLite-ICU.patch
             fi
@@ -724,7 +792,12 @@ function build {
             ;;
         
         IO::Interface)
-            build_module IO-Interface-1.06
+            # The IO::Interface tests erroneously require that lo0 be 127.0.0.1. This can be tough in jails.
+            if [[ "$OS" == "FreeBSD" && `sysctl -n security.jail.jailed` == 1 ]]; then
+                build_module IO-INterface-1.06 "" 0
+            else
+                build_module IO-Interface-1.06
+            fi
             ;;
         
         JSON::XS)
@@ -790,7 +863,7 @@ function build {
             cp -Rv ../hints ./xs
             cd ..
 
-            make # minor test failure, so don't test
+            $MAKE # minor test failure, so don't test
             build_module Template-Toolkit-2.21 "INSTALL_BASE=$PERL_BASE TT_ACCEPT=y TT_EXAMPLES=n TT_EXTRAS=n" 0
 
             ;;
@@ -806,12 +879,12 @@ function build {
                 --disable-dependency-tracking \
                 --enable-thread-safe-client \
                 --without-server --disable-shared --without-docs --without-man
-            make
+            $MAKE
             if [ $? != 0 ]; then
                 echo "make failed"
                 exit $?
             fi
-            make install
+            $MAKE install
             cd ..
             rm -rf mysql-5.1.37
 
@@ -831,16 +904,17 @@ function build {
             # build expat
             tar_wrapper zxvf expat-2.0.1.tar.gz
             cd expat-2.0.1
+            CC="$GCC" CXX="$GXX" CPP="$GPP" \
             CFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS" \
             LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS" \
                 ./configure --prefix=$BUILD \
                 --disable-dependency-tracking
-            make
+            $MAKE
             if [ $? != 0 ]; then
                 echo "make failed"
                 exit $?
             fi
-            make install
+            $MAKE install
             cd ..
 
             # Symlink static versions of libraries to avoid OSX linker choosing dynamic versions
@@ -877,6 +951,7 @@ function build {
             #   1634288 (default)
             #    461984 (with custom ftoption.h/modules.cfg)
             
+            CC="$GCC" CXX="$GXX" CPP="$GPP" \
             CFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS" \
             LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS" \
                 ./configure --prefix=$BUILD
@@ -933,16 +1008,17 @@ function build {
             	patch -p1 < ../libmediascan-freebsd.patch
             fi
 
+            CC="$GCC" CXX="$GXX" CPP="$GPP" \
             CFLAGS="-I$BUILD/include $FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
             LDFLAGS="-L$BUILD/lib $FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
             OBJCFLAGS="-L$BUILD/lib $FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
                 ./configure --prefix=$BUILD --disable-shared --disable-dependency-tracking
-            make
+            $MAKE
             if [ $? != 0 ]; then
                 echo "make failed"
                 exit $?
             fi            
-            make install
+            $MAKE install
             cd ..
 
             # build Media::Scan
@@ -960,7 +1036,7 @@ function build {
                 
             if [ $PERL_BIN ]; then
                 $PERL_BIN Makefile.PL $MSOPTS INSTALL_BASE=$PERL_BASE
-                make
+                $MAKE
                 if [ $? != 0 ]; then
                     echo "make failed, aborting"
                     exit $?
@@ -971,9 +1047,9 @@ function build {
                     echo "make test failed, aborting"
                     exit $?
                 fi
-                make install
+                $MAKE install
                 if [ $CLEAN -eq 1 ]; then
-                    make clean
+                    $MAKE clean
                 fi
             fi
             
@@ -992,17 +1068,11 @@ function build_libexif {
     tar_wrapper jxvf libexif-0.6.20.tar.bz2
     cd libexif-0.6.20
     
-    if [ ! -z "$BSD_MAJOR_VER" -a "$BSD_MAJOR_VER" -ge 11 ]; then
-        CC="$GCC"     CFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
-        LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
-            ./configure --prefix=$BUILD \
-            --disable-dependency-tracking
-    else
-        CFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
-        LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
-            ./configure --prefix=$BUILD \
-            --disable-dependency-tracking
-    fi
+    CC="$GCC" CXX="$GXX" CPP="$GPP" \
+    CFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
+    LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
+        ./configure --prefix=$BUILD \
+        --disable-dependency-tracking
     $MAKE
     if [ $? != 0 ]; then
         echo "make failed"
@@ -1030,12 +1100,13 @@ function build_libjpeg {
         cp -fv ../libjpeg-turbo-jmorecfg.h jmorecfg.h
         
         # Build 64-bit fork
+        CC="$GCC" CXX="$GXX" CPP="$GPP" \
         CFLAGS="-O3 $OSX_FLAGS" \
         CXXFLAGS="-O3 $OSX_FLAGS" \
         LDFLAGS="$OSX_FLAGS" \
             ./configure --prefix=$BUILD --host x86_64-apple-darwin NASM=/usr/local/bin/nasm \
             --disable-dependency-tracking
-        make
+        $MAKE
         if [ $? != 0 ]; then
             echo "make failed"
             exit $?
@@ -1046,12 +1117,13 @@ function build_libjpeg {
         if [ $CLEAN -eq 1 ]; then
             make clean
         fi
+        CC="$GCC" CXX="$GXX" CPP="$GPP" \
         CFLAGS="-O3 -m32 $OSX_FLAGS" \
         CXXFLAGS="-O3 -m32 $OSX_FLAGS" \
         LDFLAGS="-m32 $OSX_FLAGS" \
             ./configure --prefix=$BUILD NASM=/usr/local/bin/nasm \
             --disable-dependency-tracking
-        make
+        $MAKE
         if [ $? != 0 ]; then
             echo "make failed"
             exit $?
@@ -1062,7 +1134,7 @@ function build_libjpeg {
         lipo -create libjpeg-x86_64.a libjpeg-i386.a -output libjpeg.a
         
         # Install and replace libjpeg.a with universal version
-        make install
+        $MAKE install
         cp -f libjpeg.a $BUILD/lib/libjpeg.a
         cd ..
     
@@ -1076,17 +1148,18 @@ function build_libjpeg {
         # Disable features we don't need
         cp -fv ../libjpeg-turbo-jmorecfg.h jmorecfg.h
         
+        CC="$GCC" CXX="$GXX" CPP="$GPP" \
         CFLAGS="-O3 -m32 $OSX_FLAGS" \
         CXXFLAGS="-O3 -m32 $OSX_FLAGS" \
         LDFLAGS="-m32 $OSX_FLAGS" \
             ./configure --prefix=$BUILD NASM=/usr/local/bin/nasm \
             --disable-dependency-tracking
-        make
+        $MAKE
         if [ $? != 0 ]; then
             echo "make failed"
             exit $?
         fi
-        make install
+        $MAKE install
         cp -fv .libs/libjpeg.a ../libjpeg-i386.a
         cd ..
         
@@ -1097,11 +1170,12 @@ function build_libjpeg {
         # Disable features we don't need
         cp -fv ../libjpeg62-jmorecfg.h jmorecfg.h
         
+        CC="$GCC" CXX="$GXX" CPP="$GPP" \
         CFLAGS="-arch ppc -O3 $OSX_FLAGS" \
         LDFLAGS="-arch ppc -O3 $OSX_FLAGS" \
             ./configure --prefix=$BUILD \
             --disable-dependency-tracking
-        make
+        $MAKE
         if [ $? != 0 ]; then
             echo "make failed"
             exit $?
@@ -1124,20 +1198,16 @@ function build_libjpeg {
         # Disable features we don't need
         cp -fv ../libjpeg-turbo-jmorecfg.h jmorecfg.h
 
-        if [ -n "$BSD_MAJOR_VER" -a "$BSD_MAJOR_VER" -ge 11 ]; then
-            CC="$GCC" CFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS" CXXFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS" LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS" \
-                ./configure --prefix=$BUILD --disable-dependency-tracking
-        else
-            CFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS" CXXFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS" LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS" \
-                ./configure --prefix=$BUILD --disable-dependency-tracking
-        fi
-        make
+        CC="$GCC" CXX="$GXX" CPP="$GPP" \
+        CFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS" CXXFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS" LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS" \
+            ./configure --prefix=$BUILD --disable-dependency-tracking
+        $MAKE
         if [ $? != 0 ]; then
             echo "make failed"
             exit $?
         fi
         
-        make install
+        $MAKE install
         cd ..
         
     # build libjpeg v8 on other platforms
@@ -1148,16 +1218,17 @@ function build_libjpeg {
         # Disable features we don't need
         cp -fv ../libjpeg-jmorecfg.h jmorecfg.h
         
+        CC="$GCC" CXX="$GXX" CPP="$GPP" \
         CFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
         LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
             ./configure --prefix=$BUILD \
             --disable-dependency-tracking
-        make
+        $MAKE
         if [ $? != 0 ]; then
             echo "make failed"
             exit $?
         fi
-        make install
+        $MAKE install
         cd ..
     fi
     
@@ -1178,23 +1249,17 @@ function build_libpng {
     # Disable features we don't need
     cp -fv ../libpng-pngconf.h pngconf.h
     
-    if [ -n "$BSD_MAJOR_VER" -a "$BSD_MAJOR_VER" -ge 11 ]; then
-        CC="$GCC" CFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
-        LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
-            ./configure --prefix=$BUILD \
-            --disable-dependency-tracking
-    else
-        CFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
-        LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
-            ./configure --prefix=$BUILD \
-            --disable-dependency-tracking
-    fi
-    make && make check
+    CC="$GCC" CXX="$GXX" CPP="$GPP" \
+    CFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
+    LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
+        ./configure --prefix=$BUILD \
+        --disable-dependency-tracking
+    $MAKE && $MAKE check
     if [ $? != 0 ]; then
         echo "make failed"
         exit $?
     fi
-    make install
+    $MAKE install
     cd ..
     
     rm -rf libpng-1.4.3
@@ -1208,23 +1273,17 @@ function build_giflib {
     # build giflib
     tar_wrapper zxvf giflib-4.1.6.tar.gz
     cd giflib-4.1.6
-    if [ -n "$BSD_MAJOR_VER" -a "$BSD_MAJOR_VER" -ge 11 ]; then
-        CC="$GCC" CFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
-        LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
-            ./configure --prefix=$BUILD \
-            --disable-dependency-tracking
-    else
-        CFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
-        LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
-            ./configure --prefix=$BUILD \
-            --disable-dependency-tracking
-    fi
-    make
+    CC="$GCC" CXX="$GXX" CPP="$GPP" \
+    CFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
+    LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
+        ./configure --prefix=$BUILD \
+        --disable-dependency-tracking
+    $MAKE
     if [ $? != 0 ]; then
         echo "make failed"
         exit $?
     fi
-    make install
+    $MAKE install
     cd ..
     
     rm -rf giflib-4.1.6
@@ -1296,11 +1355,12 @@ function build_ffmpeg {
         # Build 64-bit fork (10.6/10.7)
         if [ "$OSX_VER" != "10.5" ]; then
             FLAGS="-arch x86_64 -O3 -fPIC $OSX_FLAGS"      
+            CC="$GCC" CXX="$GXX" CPP="$GPP" \
             CFLAGS="$FLAGS" \
             LDFLAGS="$FLAGS" \
                 ./configure $FFOPTS --arch=x86_64
         
-            make
+            $MAKE
             if [ $? != 0 ]; then
                 echo "make failed"
                 exit $?
@@ -1313,13 +1373,14 @@ function build_ffmpeg {
         fi
         
         # Build 32-bit fork (all OSX versions)
-        make clean
+        $MAKE clean
         FLAGS="-arch i386 -O3 $OSX_FLAGS"      
+        CC="$GCC" CXX="$GXX" CPP="$GPP" \
         CFLAGS="$FLAGS" \
         LDFLAGS="$FLAGS" \
             ./configure $FFOPTS --arch=x86_32
         
-        make
+        $MAKE
         if [ $? != 0 ]; then
             echo "make failed"
             exit $?
@@ -1332,13 +1393,14 @@ function build_ffmpeg {
         
         # Build PPC fork (10.5)
         if [ "$OSX_VER" = "10.5" ]; then
-            make clean
+            $MAKE clean
             FLAGS="-arch ppc -O3 $OSX_FLAGS"      
+            CC="$GCC" CXX="$GXX" CPP="$GPP" \
             CFLAGS="$FLAGS" \
             LDFLAGS="$FLAGS" \
                 ./configure $FFOPTS --arch=ppc --disable-altivec
         
-            make
+            $MAKE
             if [ $? != 0 ]; then
                 echo "make failed"
                 exit $?
@@ -1364,7 +1426,7 @@ function build_ffmpeg {
         fi
         
         # Install and replace libs with universal versions
-        make install
+        $MAKE install
         cp -f libavcodec.a $BUILD/lib/libavcodec.a
         cp -f libavformat.a $BUILD/lib/libavformat.a
         cp -f libavutil.a $BUILD/lib/libavutil.a
@@ -1373,6 +1435,7 @@ function build_ffmpeg {
         FLAGS=$SAVED_FLAGS
         cd ..
     else           
+        CC="$GCC" CXX="$GXX" CPP="$GPP" \
         CFLAGS="$FLAGS -O3" \
         LDFLAGS="$FLAGS -O3" \
             ./configure $FFOPTS
@@ -1410,17 +1473,18 @@ function build_bdb {
        popd
     fi
 
+    CC="$GCC" CXX="$GXX" CPP="$GPP" \
     CFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
     LDFLAGS="$FLAGS $OSX_ARCH $OSX_FLAGS -O3" \
         ../dist/configure --prefix=$BUILD $MUTEX \
         --with-cryptography=no -disable-hash --disable-queue --disable-replication --disable-statistics --disable-verify \
         --disable-dependency-tracking --disable-shared
-    make
+    $MAKE
     if [ $? != 0 ]; then
         echo "make failed"
         exit $?
     fi
-    make install
+    $MAKE install
     cd ../..
     
     rm -rf db-5.1.25
